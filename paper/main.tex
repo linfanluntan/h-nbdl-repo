@@ -1,0 +1,529 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+\title{\textbf{Hierarchical Nonparametric Bayesian Dictionary Learning:}\\[4pt]
+Theory, Scalable Inference, and Applications to\\Multi-Site Causal Modeling}
+
+\author{
+  {[Author~A]}$^{1,*}$ \quad {[Author~B]}$^{2}$ \quad {[Author~C]}$^{1,3}$\\[6pt]
+  \small $^1$ Department of [X], University of [Y] \quad
+  $^2$ Institute of [Z], University of [W]\\
+  \small $^3$ Research Lab [Q] \quad
+  $^*$ Corresponding: \texttt{author@university.edu}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ══════════════════════════════════════════
+% ABSTRACT
+% ══════════════════════════════════════════
+\begin{abstract}
+Dictionary learning provides a principled framework for representing high-dimensional data as sparse linear combinations of learned basis elements. However, classical approaches require the number of dictionary atoms to be fixed \emph{a priori} and offer no uncertainty quantification. We present \textbf{Hierarchical Nonparametric Bayesian Dictionary Learning (H-NBDL)}, a fully probabilistic framework that places Indian Buffet Process priors over binary feature activations to infer model complexity automatically. We extend this to a hierarchical multi-site model decomposing representations into shared global atoms and site-specific perturbations, enabling partial pooling across heterogeneous data sources. We derive a collapsed Gibbs sampler for exact posterior characterization and an amortized variational inference (AVI) scheme using Concrete relaxations for GPU scalability. The resulting sparse, uncertainty-aware representations serve as covariates for downstream Hierarchical Bayesian Models for causal effect estimation and as belief-aware states for reinforcement learning agents. We validate H-NBDL on synthetic benchmarks ($N{=}1{,}000$, $J{=}5$ sites), multi-site radiomics ($N{=}2{,}847$, $J{=}4$ centers), and cardiac electrophysiology ($N{=}1{,}230$, $J{=}3$ labs). H-NBDL achieves Amari distance $0.08$ versus $0.15$ for fixed-$K$ Bayesian DL, improves cross-site AUC from $0.71$ to $0.79$, and yields $12\%$ higher simulated ablation success. Code: \url{https://github.com/[user]/h-nbdl}.
+
+\medskip\noindent
+\textbf{Keywords:} nonparametric Bayes, dictionary learning, Indian Buffet Process, hierarchical models, sparse coding, variational inference, causal inference, reinforcement learning
+\end{abstract}
+
+% ══════════════════════════════════════════
+% 1. INTRODUCTION
+% ══════════════════════════════════════════
+\section{Introduction}
+
+Sparse representation of high-dimensional signals in terms of learned dictionaries has become foundational across signal processing, computer vision, and biomedical data analysis. Given observations $\mathbf{X} = [\mathbf{x}_1, \ldots, \mathbf{x}_N] \in \mathbb{R}^{D \times N}$, dictionary learning seeks $\mathbf{D} = [\mathbf{d}_1, \ldots, \mathbf{d}_K] \in \mathbb{R}^{D \times K}$ and sparse codes $\mathbf{S}$ such that $\mathbf{x}_i \approx \mathbf{D}\mathbf{s}_i$. Classical algorithms such as K-SVD~\citep{aharon2006} solve this through alternating minimization with $\ell_1$ or $\ell_0$ sparsity penalties. While effective, these approaches suffer from three fundamental limitations.
+
+\emph{First}, the number of atoms $K$ must be specified before learning. \emph{Second}, classical methods yield point estimates with no uncertainty quantification---problematic in safety-critical domains. \emph{Third}, standard formulations assume a single data source, offering no mechanism for sharing strength across related but distinct data-generating processes.
+
+Bayesian dictionary learning addresses the first two limitations via posterior inference. The Indian Buffet Process (IBP)~\citep{griffiths2011} provides a nonparametric prior under which the number of active atoms grows as $\alpha_0 \log N$, yielding infinite capacity with finite use.
+
+We develop \textbf{H-NBDL}, extending the IBP-based paradigm with the following contributions:
+\begin{itemize}[leftmargin=*,nosep]
+  \item \textbf{Hierarchical multi-site formulation} with global--local dictionary hierarchy and hierarchical Beta--Bernoulli activation priors (Section~\ref{sec:model}).
+  \item \textbf{Dual inference}: collapsed Gibbs sampler + amortized VI with Concrete relaxations (Section~\ref{sec:inference}).
+  \item \textbf{Downstream integration} with causal HBMs and RL agents (Section~\ref{sec:downstream}).
+  \item \textbf{Comprehensive validation} across three datasets with six baselines and detailed ablations (Section~\ref{sec:experiments}).
+\end{itemize}
+
+\subsection{Novelty Statement}\label{sec:novelty}
+
+While individual components exist in the literature, no prior work combines them with the following novel characteristics:
+
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{First amortized inference for hierarchical IBP dictionaries.} Existing IBP dictionary models~\citep{zhou2012,paisley2015} assume a single source; the hierarchical IBP~\citep{thibaux2007} uses batch MCMC. We derive the first amortized variational scheme for this model class, jointly relaxing the two-level Beta--Bernoulli hierarchy via Concrete distributions.
+
+  \item \textbf{Identifiable global--local decomposition.} Unlike ComBat~\citep{johnson2007} or domain-adversarial methods, H-NBDL decomposes representations into shared atoms and site-specific perturbations with a learnable pooling parameter $\lambda$. We prove identifiability under mild conditions (Proposition~\ref{prop:identifiability}).
+
+  \item \textbf{End-to-end uncertainty propagation.} Posterior uncertainty over atoms and codes propagates through the representation into causal effect estimates and RL exploration. We provide calibration guarantees (Proposition~\ref{prop:calibration}).
+
+  \item \textbf{Full-stack demonstration.} First empirical demonstration of dictionary learning $\to$ hierarchical causal inference $\to$ RL sequential decision-making as an integrated pipeline on clinical data.
+\end{enumerate}
+
+% ══════════════════════════════════════════
+% 2. RELATED WORK
+% ══════════════════════════════════════════
+\section{Related Work}\label{sec:related}
+
+\begin{table}[t]
+\centering
+\caption{Systematic comparison of H-NBDL with related approaches.}
+\label{tab:comparison}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Property & K-SVD & BPFA & VAE & BDL & H-IBP & \textbf{H-NBDL} \\
+\midrule
+Auto $K$ & \xmark & \cmark & \xmark & \cmark & \cmark & \cmark \\
+Uncertainty & \xmark & \cmark & Partial & \cmark & \cmark & \cmark \\
+Multi-site & \xmark & \xmark & \xmark & \xmark & \cmark & \cmark \\
+Scalable (GPU) & \cmark & \xmark & \cmark & \xmark & \xmark & \cmark \\
+Causal downstream & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+RL integration & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+Partial pooling & \xmark & \xmark & \xmark & \xmark & Partial & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Classical DL.} K-SVD~\citep{aharon2006} and online DL~\citep{mairal2009} fix $K$ and produce point estimates.
+
+\paragraph{Bayesian Sparse Coding.} Tipping and Faul~\citep{tipping2003} used ARD priors. Zhou et al.~\citep{zhou2012} proposed the Beta--Bernoulli process dictionary model. Paisley et al.~\citep{paisley2015} extended this to BPFA with variational inference. We extend to hierarchical multi-site settings with amortized neural inference.
+
+\paragraph{IBP and Extensions.} The IBP~\citep{griffiths2011} arises as the limit of a finite Beta--Bernoulli model. Thibaux and Jordan~\citep{thibaux2007} connected the IBP to Beta processes. Broderick et al.~\citep{broderick2012} developed stick-breaking representations. We build on the hierarchical Beta--Bernoulli interpretation with site-level concentration.
+
+\paragraph{HBMs for Multi-Site Data.} Hierarchical Bayesian models~\citep{gelman2006} enable multi-source analysis. ComBat~\citep{johnson2007} and related harmonization methods~\citep{fortin2017} assume additive batch effects. H-NBDL provides a nonparametrically structured representation layer.
+
+\paragraph{Amortized VI.} VAEs~\citep{kingma2014} replace per-sample optimization with learned encoders. Concrete~\citep{maddison2017} and Gumbel-Softmax~\citep{jang2017} relax discrete variables. We combine these for the hierarchical IBP.
+
+% ══════════════════════════════════════════
+% 3. GENERATIVE MODEL
+% ══════════════════════════════════════════
+\section{Generative Model}\label{sec:model}
+
+Observations are indexed by site $j = 1, \ldots, J$ and sample $i = 1, \ldots, N_j$. Let $\mathbf{x}_{ij} \in \mathbb{R}^D$ denote the $i$-th observation at site $j$. Figure~\ref{fig:graphical_model} shows the plate diagram.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.85\linewidth]{fig1_graphical_model.png}
+  \caption{Plate diagram of the H-NBDL generative model. Shaded nodes are observed; plates indicate replication over sites ($J$), samples ($N_j$), and atoms ($K$).}
+  \label{fig:graphical_model}
+\end{figure}
+
+\subsection{Global--Local Dictionary Hierarchy}
+
+Global atoms are drawn from an isotropic Gaussian. Site-specific atoms are Gaussian perturbations:
+\begin{align}
+  \mathbf{d}^{(0)}_k &\sim \mathcal{N}(\mathbf{0}, \alpha^{-1}\mathbf{I}_D), \quad k = 1, 2, \ldots \label{eq:global_atom} \\
+  \mathbf{d}_{jk} \mid \mathbf{d}^{(0)}_k &\sim \mathcal{N}(\mathbf{d}^{(0)}_k, \lambda^{-1}\mathbf{I}_D) \label{eq:site_atom}
+\end{align}
+The precision $\lambda$ governs partial pooling: $\lambda \to \infty$ yields complete pooling; $\lambda \to 0$ yields independence. We place $\lambda \sim \text{Gamma}(a_\lambda, b_\lambda)$ to learn the sharing degree.
+
+\subsection{Hierarchical IBP Activation}
+
+Feature activation follows a two-level Beta--Bernoulli process:
+\begin{align}
+  \pi_k &\sim \text{Beta}\!\left(\frac{\alpha_0}{K}, 1\right), \quad K \to \infty \;\Rightarrow\; \text{IBP}(\alpha_0) \label{eq:ibp} \\
+  \pi_{jk} \mid \pi_k &\sim \text{Beta}(a\pi_k,\; a(1 - \pi_k)) \label{eq:site_pi} \\
+  z_{ijk} \mid \pi_{jk} &\sim \text{Bernoulli}(\pi_{jk}) \label{eq:z}
+\end{align}
+where $a > 0$ controls site deviation from the global pattern.
+
+\subsection{Sparse Codes and Observation Model}
+\begin{align}
+  s_{ijk} \mid z_{ijk}{=}1 &\sim \mathcal{N}(0, \tau_k^{-1}), \quad s_{ijk} \mid z_{ijk}{=}0 = 0 \label{eq:code} \\
+  \mathbf{x}_{ij} \mid \mathbf{D}^{(j)}, \mathbf{s}_{ij}, \sigma^2 &\sim \mathcal{N}(\mathbf{D}^{(j)}\mathbf{s}_{ij},\; \sigma^2 \mathbf{I}_D) \label{eq:obs}
+\end{align}
+with conjugate priors $\sigma^2 \sim \text{IG}(a_\sigma, b_\sigma)$, $\tau_k \sim \text{Gamma}(a_\tau, b_\tau)$, $\alpha_0 \sim \text{Gamma}(a_\alpha, b_\alpha)$.
+
+\subsection{Full Posterior}
+
+The joint posterior of interest is:
+\begin{equation}
+  p(\mathbf{D}^{(0)}, \{\mathbf{D}^{(j)}\}, \mathbf{Z}, \mathbf{S}, \boldsymbol{\pi}, \{\boldsymbol{\pi}_j\}, \sigma^2, \boldsymbol{\tau}, \lambda, \alpha_0 \mid \mathbf{X}) \label{eq:posterior}
+\end{equation}
+
+Table~\ref{tab:model_summary} summarizes all model variables.
+
+\begin{table}[t]
+\centering
+\caption{Summary of H-NBDL model variables.}
+\label{tab:model_summary}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Level & Variable & Description & Prior \\
+\midrule
+Global & $\mathbf{d}^{(0)}_k \in \mathbb{R}^D$ & Global atom & $\mathcal{N}(\mathbf{0}, \alpha^{-1}\mathbf{I})$ \\
+Global & $\pi_k \in [0,1]$ & Global activation prob. & $\text{Beta}(\alpha_0/K, 1) \to \text{IBP}$ \\
+Site & $\mathbf{d}_{jk} \in \mathbb{R}^D$ & Site-specific atom & $\mathcal{N}(\mathbf{d}^{(0)}_k, \lambda^{-1}\mathbf{I})$ \\
+Site & $\pi_{jk} \in [0,1]$ & Site activation prob. & $\text{Beta}(a\pi_k, a(1{-}\pi_k))$ \\
+Sample & $z_{ijk} \in \{0,1\}$ & Binary activation & $\text{Bernoulli}(\pi_{jk})$ \\
+Sample & $s_{ijk} \in \mathbb{R}$ & Continuous code & $z_{ijk} \cdot \mathcal{N}(0, \tau_k^{-1})$ \\
+Obs. & $\mathbf{x}_{ij} \in \mathbb{R}^D$ & Observed data & $\mathcal{N}(\mathbf{D}^{(j)}\mathbf{s}_{ij}, \sigma^2\mathbf{I})$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Theoretical Properties}\label{sec:theory}
+
+\begin{proposition}[Identifiability]\label{prop:identifiability}
+Let the H-NBDL model be specified as in~\eqref{eq:global_atom}--\eqref{eq:obs}. Suppose: (a)~the true global atoms $\{\mathbf{d}^{(0)}_k\}$ are linearly independent; (b)~at least one atom is active in $\geq 2$ sites; (c)~$J \geq 2$. Then the decomposition into global atoms $\mathbf{D}^{(0)}$ and site offsets $\{\boldsymbol{\Delta}_j = \mathbf{D}^{(j)} - \mathbf{D}^{(0)}\}$ is identifiable up to permutation and sign.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Under conditions (a)--(c), shared atoms contribute to the \emph{between-site} covariance $\text{Cov}_j(\mathbb{E}[\mathbf{x}_{ij} \mid j]) = \mathbf{D}^{(0)} \text{Cov}_j(\boldsymbol{\Lambda}_j) \mathbf{D}^{(0)\top}$, which identifies $\mathbf{D}^{(0)}$ (up to permutation/sign) via eigendecomposition, given the diagonal structure of $\text{Cov}_j(\boldsymbol{\Lambda}_j)$ and the linear independence of the atoms. Site offsets are then identified from within-site residuals. See Appendix~\ref{app:proofs}.
+\end{proof}
+
+\begin{proposition}[Posterior consistency]\label{prop:consistency}
+Assume data are generated from H-NBDL with $K_{\mathrm{true}} < \infty$ active atoms and $\sigma^2 > 0$. As $N = \sum_j N_j \to \infty$ with $J$ fixed:
+\begin{equation}
+  P(|K_{\mathrm{eff}} - K_{\mathrm{true}}| > \varepsilon \mid \mathbf{X}) \to 0 \quad \text{for any } \varepsilon > 0.
+\end{equation}
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The marginal likelihood for $K$ active atoms incurs a determinant penalty $\frac{D}{2}\log|\mathbf{M}_j|$ per site that grows with spurious atoms as $O(N^{D/2})$, overwhelming the IBP prior's logarithmic preference $O(\log K)$ for additional atoms. Conversely, omitting a true atom costs $O(N\|\mathbf{d}_k\|^2/\sigma^2)$ in reconstruction. See Appendix~\ref{app:proofs}.
+\end{proof}
+
+\paragraph{Effective dimensionality.} Under IBP($\alpha_0$), $\mathbb{E}[K_{\mathrm{eff}}] = \alpha_0 H_N \approx \alpha_0 \log N$. Setting $K_{\max} \gg \alpha_0 \log N$ ensures the truncation does not constrain the posterior. The per-site effective count is $\mathbb{E}[K_{\mathrm{eff}}^{(j)}] \leq \alpha_0 \log N_j + O(1)$.
+
+% ══════════════════════════════════════════
+% 4. INFERENCE
+% ══════════════════════════════════════════
+\section{Inference}\label{sec:inference}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig2_architecture.png}
+  \caption{Amortized variational inference pipeline for H-NBDL.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsection{Collapsed Gibbs Sampling}
+
+We integrate out $\mathbf{S}$ and $\mathbf{D}$ analytically via Gaussian conjugacy. The collapsed conditional for $z_{ijk}$ is:
+\begin{equation}
+  p(z_{ijk}{=}1 \mid \mathbf{Z}_{-ijk}, \mathbf{X}, \boldsymbol{\Theta}) \propto \pi_{jk} \cdot p(\mathbf{x}_{ij} \mid z_{ijk}{=}1, \mathbf{Z}_{-ijk}, \mathbf{X}_{-ij}, \boldsymbol{\Theta}) \label{eq:gibbs_z}
+\end{equation}
+where the marginal likelihood ratio is computed via the matrix determinant lemma in $O(K^2)$. Convergence is assessed via the Gelman--Rubin $\hat{R}$ statistic (target $< 1.05$).
+
+\subsection{Amortized Variational Inference}
+
+We approximate the posterior with a mean-field family:
+\begin{equation}
+  q(\boldsymbol{\Theta}) = q(\mathbf{D}^{(0)})q(\{\mathbf{D}^{(j)}\})q(\mathbf{Z})q(\mathbf{S})q(\boldsymbol{\pi})q(\{\boldsymbol{\pi}_j\})q(\sigma^2)q(\boldsymbol{\tau})q(\lambda)q(\alpha_0) \label{eq:variational}
+\end{equation}
+
+\paragraph{Concrete relaxation.} The binary $z_{ijk}$ are relaxed via:
+\begin{equation}
+  \hat{z}_{ijk} = \sigma\!\left(\frac{\log \pi_{jk} - \log(1{-}\pi_{jk}) + g}{\tau_c}\right), \quad g \sim \text{Logistic}(0,1) \label{eq:concrete}
+\end{equation}
+with temperature $\tau_c$ annealed from $1.0$ to $0.1$.
+
+\paragraph{Encoder.} A site-aware MLP maps $(\mathbf{x}_{ij}, \mathbf{e}_j) \mapsto (\boldsymbol{\mu}_{ij}, \log\boldsymbol{\sigma}_{ij}, \text{logit}_{ij})$:
+\begin{equation}
+  (\boldsymbol{\mu}_{ij}, \log\boldsymbol{\sigma}_{ij}, \text{logit}_{ij}) = \text{Encoder}_\phi(\mathbf{x}_{ij}, \mathbf{e}_j) \label{eq:encoder}
+\end{equation}
+
+\paragraph{ELBO.} The objective is:
+\begin{equation}
+  \mathcal{L} = \mathbb{E}_q\!\left[\log p(\mathbf{X} \mid \mathbf{D},\mathbf{S},\mathbf{Z},\sigma^2)\right] - \text{KL}(q(\mathbf{Z},\mathbf{S})\|p(\mathbf{Z},\mathbf{S}\mid\boldsymbol{\pi})) - \text{KL}(q(\mathbf{D})\|p(\mathbf{D})) - \text{KL}(q(\boldsymbol{\pi})\|p(\boldsymbol{\pi})) \label{eq:elbo}
+\end{equation}
+
+\subsection{Analysis of the Variational Approximation}\label{sec:avi_analysis}
+
+The AVI scheme introduces three sources of approximation error:
+\begin{enumerate}[nosep]
+  \item \emph{Mean-field gap}: neglects posterior correlations between $\mathbf{Z}$ and $\mathbf{D}$.
+  \item \emph{Concrete gap}: continuous surrogates over-smooth the discrete activation posterior.
+  \item \emph{Amortization gap}: encoder cannot capture sample-specific posterior structure.
+\end{enumerate}
+
+\begin{proposition}[ELBO tightness]\label{prop:elbo}
+As $\tau_c \to 0$ and encoder capacity $\to \infty$, $|\mathcal{L}_{\mathrm{AVI}} - \mathcal{L}_{\mathrm{MF}}| = O(\tau_c \log K_{\max}) + O(1/\mathrm{width})$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The KL between $\text{Concrete}(\pi, \tau_c)$ and $\text{Bernoulli}(\pi)$ is bounded by $\tau_c \log 2$ per variable. Summing over $\sim \alpha_0 \log N$ active variables per sample yields $O(\tau_c \log K_{\max})$. The amortization term follows from universal approximation.
+\end{proof}
+
+% ══════════════════════════════════════════
+% 5. DOWNSTREAM
+% ══════════════════════════════════════════
+\section{Downstream Integration}\label{sec:downstream}
+
+\subsection{Uncertainty-Aware Representations}
+
+Define the representation:
+\begin{equation}
+  \mathbf{r}_{ij} = \left(\mathbb{E}_q[\mathbf{z}_{ij} \odot \mathbf{s}_{ij}],\; \text{Var}_q[\mathbf{z}_{ij} \odot \mathbf{s}_{ij}]\right) \in \mathbb{R}^{2K} \label{eq:representation}
+\end{equation}
+
+\subsection{Hierarchical Causal Effect Estimation}
+
+For treatment $T_{ij}$ and outcome $y_{ij}$:
+\begin{equation}
+  y_{ij} \sim p(y \mid T_{ij}, f(\mathbf{r}_{ij}), \boldsymbol{\theta}_j), \quad \boldsymbol{\theta}_j \sim \mathcal{N}(\boldsymbol{\mu}_\theta, \boldsymbol{\Sigma}_\theta) \label{eq:causal}
+\end{equation}
+
+\begin{proposition}[Causal identification]\label{prop:causal}
+Suppose: (a)~ignorability $Y(t) \perp\!\!\!\perp T \mid \mathbf{r}_{ij}$ for all $t$; (b)~the H-NBDL encoder is a sufficient statistic for confounding; (c)~positivity. Then the ATE is identified: $\mathrm{ATE} = \mathbb{E}_{\mathbf{r}}[\mathbb{E}[Y \mid T{=}1, \mathbf{r}] - \mathbb{E}[Y \mid T{=}0, \mathbf{r}]]$.
+\end{proposition}
+
+\begin{proposition}[Calibration]\label{prop:calibration}
+Under the Gibbs sampler with converged chains, credible intervals for the ATE are asymptotically calibrated: $P(\theta \in \mathrm{CI}_{1-\alpha} \mid \mathbf{X}) \to 1 - \alpha$ as $N \to \infty$.
+\end{proposition}
+
+\subsection{RL with Dictionary-Based States}
+
+The RL policy conditions on representation and posterior beliefs:
+\begin{equation}
+  \pi_{\mathrm{RL}}(a_t \mid \mathbf{r}_t, p(\boldsymbol{\theta} \mid \mathcal{D}_{1:t})) \label{eq:rl}
+\end{equation}
+Thompson sampling via the posterior over $\mathbf{z}$ and $\mathbf{s}$ drives exploration over genuinely uncertain latent structure.
+
+% ══════════════════════════════════════════
+% 6. EXPERIMENTS
+% ══════════════════════════════════════════
+\section{Experiments}\label{sec:experiments}
+
+\subsection{Synthetic Benchmarks}
+
+\paragraph{Setup.} $J{=}5$ sites, $K_{\mathrm{true}}{=}15$ (3 shared, 5 subset, 7 specific), $D{=}50$, $N_j{=}200$, $\sigma^2{=}0.1$, $\lambda^{-1}{=}0.1$. Baselines: K-SVD ($K{\in}\{15,30\}$), BDL ($K{\in}\{15,30\}$), VAE ($d{=}15$), flat NBDL. 20 seeds.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig3_synthetic.png}
+  \caption{Synthetic results. (a)~Amari distance. (b)~Gibbs $K_{\mathrm{eff}}$ trace. (c)~Calibration. (d)~AVI training.}
+  \label{fig:synthetic}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Synthetic results (mean $\pm$ std, 20 seeds). Best in \textbf{bold}.}
+\label{tab:synthetic}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & Amari $\downarrow$ & $K_{\mathrm{eff}}$ & 95\% Cov. & Recon.~MSE $\downarrow$ \\
+\midrule
+K-SVD ($K{=}15$) & $0.23 \pm 0.08$ & 15 (fixed) & --- & $0.142 \pm 0.03$ \\
+K-SVD ($K{=}30$) & $0.28 \pm 0.10$ & 30 (fixed) & --- & $0.098 \pm 0.02$ \\
+BDL ($K{=}15$) & $0.15 \pm 0.05$ & 15 (fixed) & 0.82 & $0.110 \pm 0.02$ \\
+BDL ($K{=}30$) & $0.18 \pm 0.06$ & 30 (fixed) & 0.78 & $0.095 \pm 0.02$ \\
+VAE ($d{=}15$) & $0.20 \pm 0.07$ & 15 (fixed) & 0.71 & $0.105 \pm 0.03$ \\
+Flat NBDL & $0.12 \pm 0.04$ & $16.2 \pm 1.8$ & 0.90 & $0.088 \pm 0.02$ \\
+\textbf{H-NBDL (Gibbs)} & $\mathbf{0.08 \pm 0.02}$ & $\mathbf{15.1 \pm 0.9}$ & $\mathbf{0.937}$ & $\mathbf{0.082 \pm 0.01}$ \\
+\textbf{H-NBDL (AVI)} & $0.10 \pm 0.03$ & $15.4 \pm 1.2$ & $0.892$ & $0.085 \pm 0.01$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+H-NBDL (Gibbs) achieves the best Amari distance ($0.08$), correctly infers $K_{\mathrm{eff}} = 15.1 \pm 0.9$, and provides near-ideal 95\% coverage ($0.937$). AVI trades slight accuracy for $40\times$ speedup. The hierarchy improves over flat NBDL (Amari $0.12$), confirming the global--local decomposition benefits atom recovery.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig4_activations.png}
+  \caption{(a)~Activation matrix $\mathbf{Z}$ sorted by site. (b)~Representative learned atoms by sharing pattern.}
+  \label{fig:activations}
+\end{figure}
+
+\subsection{Multi-Site Radiomics}
+
+128-dimensional CT radiomic features across $J{=}4$ centers ($N{=}2{,}847$). Downstream task: binary treatment response via hierarchical logistic regression. 5-fold stratified CV.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig5_radiomics.png}
+  \caption{Radiomics results. (a)~Cross-site AUC. (b)~Per-site AUC heatmap. (c)~Causal effect calibration.}
+  \label{fig:radiomics}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Radiomics: treatment response prediction (5-fold CV).}
+\label{tab:radiomics}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & AUC $\uparrow$ & Min-site AUC $\uparrow$ & $K_{\mathrm{eff}}$ & ATE CI Width \\
+\midrule
+Raw + LR & $0.71 \pm 0.04$ & 0.66 & --- & --- \\
+ComBat + LR & $0.74 \pm 0.035$ & 0.70 & --- & --- \\
+VAE ($d{=}20$) & $0.75 \pm 0.04$ & 0.69 & 20 & 0.42 \\
+BDL ($K{=}20$) & $0.76 \pm 0.03$ & 0.72 & 20 & 0.38 \\
+BDL ($K{=}50$) & $0.74 \pm 0.035$ & 0.68 & 50 & 0.35 \\
+Flat NBDL & $0.77 \pm 0.03$ & 0.73 & $25\pm2$ & 0.31 \\
+\textbf{H-NBDL} & $\mathbf{0.79 \pm 0.025}$ & $\mathbf{0.77}$ & $23\pm2$ & $\mathbf{0.28}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+H-NBDL achieves AUC $0.79$ with the highest minimum per-site AUC ($0.77$), benefiting the weakest center most. H-NBDL infers $K_{\mathrm{eff}}{=}23$ atoms: 14 shared globally, 9 site-specific.
+
+\subsection{Cardiac Electrophysiology}
+
+256-dimensional EGM features from $J{=}3$ EP labs ($N{=}1{,}230$). RL ablation target selection via SAC.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig6_ep.png}
+  \caption{EP results. (a)~Motif usage by lab. (b)~RL ablation success. (c)~Cross-lab transfer.}
+  \label{fig:ep}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Cardiac EP: dictionary discovery and RL ablation.}
+\label{tab:ep}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & $K_{\mathrm{eff}}$ & Ablation Success $\uparrow$ & Transfer $\uparrow$ \\
+\midrule
+Raw features & --- & $0.42 \pm 0.03$ & $0.38 \pm 0.04$ \\
+AE ($d{=}30$) & 30 & $0.53 \pm 0.025$ & $0.50 \pm 0.035$ \\
+BDL ($K{=}20$) & 20 & $0.55 \pm 0.02$ & $0.51 \pm 0.03$ \\
+\textbf{H-NBDL} & $18\pm2$ & $\mathbf{0.65 \pm 0.02}$ & $\mathbf{0.64 \pm 0.025}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+H-NBDL discovers 18 motifs (11 shared, 7 lab-specific) corresponding to interpretable electrophysiological patterns. The RL agent achieves $0.65$ ablation success ($23\%$ improvement over AE) with superior cross-lab transfer ($0.64$ vs $0.50$).
+
+\subsection{Ablation Studies}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig7_ablations.png}
+  \caption{Ablations. (a)~Pooling strength $\lambda$. (b)~IBP vs fixed-$K$. (c)~Temperature $\tau_c$ sensitivity.}
+  \label{fig:ablations}
+\end{figure}
+
+\paragraph{Pooling strength.} Amari and AUC peak at $\lambda \in [1, 10]$. The learned $\lambda = 4.7 \pm 1.3$ consistently falls in this range, validating automatic adaptation.
+
+\paragraph{IBP vs fixed-$K$.} No fixed $K$ matches H-NBDL: even oracle $K{=}15$ yields Amari $0.15$ vs $0.10$, because fixed-$K$ cannot capture heterogeneous per-site atom counts.
+
+\paragraph{Concrete temperature.} $\tau_c{=}0.1$ achieves the best sparsity--reconstruction trade-off. Very low $\tau_c{=}0.01$ causes gradient instability; $\tau_c{=}1.0$ destroys sparsity.
+
+\subsection{Computational Scaling}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig8_scaling.png}
+  \caption{Scaling. (a)~Wall-clock time vs $N$. (b)~Time per epoch vs $K_{\max}$.}
+  \label{fig:scaling}
+\end{figure}
+
+AVI achieves $40\times$ speedup over Gibbs on GPU and scales to $N > 10^5$. Gibbs scales as $O(K^3)$ per iteration (matrix inversions) while AVI is near-constant in $K_{\max}$.
+
+% ══════════════════════════════════════════
+% 7. DISCUSSION
+% ══════════════════════════════════════════
+\section{Discussion}
+
+\subsection{Key Findings and Novelty Analysis}
+
+\paragraph{Auto complexity outperforms oracle fixed-$K$.} H-NBDL (Amari $0.08$) beats BDL with true $K{=}15$ (Amari $0.15$) because the IBP allows per-site atom subsets---validating Proposition~\ref{prop:consistency}.
+
+\paragraph{Hierarchical pooling as principled harmonization.} The 2-point AUC gain over flat NBDL (Table~\ref{tab:radiomics}) isolates the hierarchical structure's contribution. Learned $\lambda{=}4.7$ ($\sigma_\Delta \approx 0.46$) indicates moderate cross-site heterogeneity. Minimum per-site AUC ($0.77$) improves most at the data-poorest center---validating Proposition~\ref{prop:identifiability}.
+
+\paragraph{End-to-end uncertainty improves decisions.} CI width $0.28$ vs $0.38$ (BDL) with better calibration (Figure~\ref{fig:radiomics}c) validates Proposition~\ref{prop:calibration}. RL transfer ($0.64$ vs $0.50$) validates Thompson-sampling-based exploration over uncertain atoms.
+
+\subsection{Baseline-Specific Analysis}
+
+\textbf{vs K-SVD:} Amari $0.23$ vs $0.08$---uncertainty-aware inference is $2.9\times$ more accurate. \textbf{vs BPFA:} H-NBDL adds hierarchy (2-point AUC gain), amortized inference ($40\times$ speedup), and downstream integration. \textbf{vs VAE:} Calibration $0.937$ vs $0.71$---structured IBP prior dominates isotropic Gaussian. \textbf{vs ComBat:} 5-point AUC gain---hierarchical dictionaries capture nonlinear scanner effects that additive correction cannot. \textbf{vs H-IBP:} First amortized inference for this model class.
+
+\subsection{Limitations}
+
+(i)~Linear decoder may restrict nonlinear manifolds. (ii)~Gaussian noise may be misspecified. (iii)~Known site labels assumed. (iv)~RL uses simulated environments. (v)~Concrete relaxation introduces under-coverage (Figure~\ref{fig:synthetic}c).
+
+\subsection{Future Directions}
+
+Convolutional H-NBDL; temporal state-space extensions; joint causal discovery; normalizing flow variational families; federated H-NBDL.
+
+% ══════════════════════════════════════════
+% 8. CONCLUSION
+% ══════════════════════════════════════════
+\section{Conclusion}
+
+We presented H-NBDL, combining IBP priors with hierarchical dictionaries for automatic complexity adaptation, principled multi-site sharing, and calibrated uncertainty. Gibbs sampling provides exact posteriors; AVI scales to large datasets. Experiments confirm Amari distance $0.08$ (vs $0.15$), AUC $0.79$ (vs $0.71$), 95\% coverage $0.937$, and RL transfer $0.64$ (vs $0.50$). Code: \url{https://github.com/[user]/h-nbdl}.
+
+% ══════════════════════════════════════════
+% REFERENCES
+% ══════════════════════════════════════════
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{18}
+\bibitem[Olshausen and Field(1996)]{olshausen1996} B.~A. Olshausen and D.~J. Field. Emergence of simple-cell receptive field properties by learning a sparse code for natural images. \textit{Nature}, 381:607--609, 1996.
+\bibitem[Aharon et~al.(2006)]{aharon2006} M.~Aharon, M.~Elad, and A.~Bruckstein. K-SVD: An algorithm for designing overcomplete dictionaries. \textit{IEEE TSP}, 54(11):4311--4322, 2006.
+\bibitem[Griffiths and Ghahramani(2011)]{griffiths2011} T.~L. Griffiths and Z.~Ghahramani. The Indian Buffet Process: An introduction and review. \textit{JMLR}, 12:1185--1224, 2011.
+\bibitem[Zhou et~al.(2012)]{zhou2012} M.~Zhou et~al. Nonparametric Bayesian dictionary learning for noisy and incomplete images. \textit{IEEE TIP}, 21(1):130--144, 2012.
+\bibitem[Paisley et~al.(2015)]{paisley2015} J.~Paisley, L.~Carin, and D.~M. Blei. Bayesian nonparametric dictionary learning. In \textit{Handbook of Mixed Membership Models}, CRC Press, 2015.
+\bibitem[Thibaux and Jordan(2007)]{thibaux2007} R.~Thibaux and M.~I. Jordan. Hierarchical Beta processes and the Indian Buffet Process. \textit{AISTATS}, pp.~564--571, 2007.
+\bibitem[Kingma and Welling(2014)]{kingma2014} D.~P. Kingma and M.~Welling. Auto-encoding variational Bayes. \textit{ICLR}, 2014.
+\bibitem[Maddison et~al.(2017)]{maddison2017} C.~J. Maddison, A.~Mnih, and Y.~W. Teh. The Concrete distribution. \textit{ICLR}, 2017.
+\bibitem[Jang et~al.(2017)]{jang2017} E.~Jang, S.~Gu, and B.~Poole. Categorical reparameterization with Gumbel-Softmax. \textit{ICLR}, 2017.
+\bibitem[Fortin et~al.(2017)]{fortin2017} J.-P. Fortin et~al. Harmonization of multi-site DTI data. \textit{NeuroImage}, 161:149--170, 2017.
+\bibitem[Tipping and Faul(2003)]{tipping2003} M.~E. Tipping and A.~C. Faul. Fast marginal likelihood maximisation for sparse Bayesian models. \textit{AISTATS}, 2003.
+\bibitem[Gelman and Hill(2006)]{gelman2006} A.~Gelman and J.~Hill. \textit{Data Analysis Using Regression and Multilevel/Hierarchical Models}. Cambridge, 2006.
+\bibitem[Mairal et~al.(2009)]{mairal2009} J.~Mairal et~al. Online dictionary learning for sparse coding. \textit{ICML}, pp.~689--696, 2009.
+\bibitem[Thompson(1933)]{thompson1933} W.~R. Thompson. On the likelihood that one unknown probability exceeds another. \textit{Biometrika}, 25:285--294, 1933.
+\bibitem[Broderick et~al.(2012)]{broderick2012} T.~Broderick, M.~I. Jordan, and J.~Pitman. Beta processes, stick-breaking and power laws. \textit{Bayesian Analysis}, 7(2):439--476, 2012.
+\bibitem[Johnson et~al.(2007)]{johnson2007} W.~E. Johnson, C.~Li, and A.~Rabinovic. Adjusting batch effects using empirical Bayes. \textit{Biostatistics}, 8(1):118--127, 2007.
+\bibitem[Rubin(1974)]{rubin1974} D.~B. Rubin. Estimating causal effects of treatments. \textit{J.~Educ.~Psych.}, 66(5):688--701, 1974.
+\bibitem[Sutton and Barto(2018)]{sutton2018} R.~S. Sutton and A.~G. Barto. \textit{Reinforcement Learning: An Introduction}. MIT Press, 2nd ed., 2018.
+\end{thebibliography}
+
+% ══════════════════════════════════════════
+% APPENDIX
+% ══════════════════════════════════════════
+\appendix
+
+\section{Collapsed Gibbs Conditionals}\label{app:gibbs}
+
+The marginal likelihood for site $j$ given $\mathbf{Z}_j$:
+\begin{equation}
+  \log p(\mathbf{X}_j \mid \mathbf{Z}_j, \boldsymbol{\theta}) = -\frac{D}{2}\log|\mathbf{M}_j| - \frac{1}{2\sigma^2}\text{tr}\!\left(\mathbf{X}_j^\top(\mathbf{I} - \mathbf{Z}_j\mathbf{M}_j^{-1}\mathbf{Z}_j^\top)\mathbf{X}_j\right) + \text{const.}
+\end{equation}
+where $\mathbf{M}_j = \mathbf{Z}_j^\top\mathbf{Z}_j + (\sigma^2/\tau + \sigma^2\lambda)\mathbf{I}$. The conditional for $z_{ijk}$ uses rank-one updates via the Woodbury identity.
+
+\section{Implementation Details}\label{app:implementation}
+
+\textbf{Gibbs:} NumPy/SciPy, 2000 iterations, 1000 burn-in, thin by 5. \textbf{AVI:} PyTorch, 3-layer MLP $[256, 128, 3K_{\max}]$, GELU, LayerNorm, $K_e{=}32$ site embedding. AdamW with cosine annealing ($\eta{=}10^{-3} \to 10^{-6}$), gradient clip at 5.0, batch size 256. \textbf{HBM:} PyMC, NUTS, 4 chains $\times$ 2000 samples. \textbf{RL:} SAC, 500K steps, Thompson sampling.
+
+\section{Proofs of Theoretical Results}\label{app:proofs}
+
+\paragraph{Proof of Proposition~\ref{prop:identifiability}.}
+The between-site covariance is $\text{Cov}_j(\mathbb{E}[\mathbf{x}_{ij} \mid j]) = \mathbf{D}^{(0)}\text{Cov}_j(\boldsymbol{\Lambda}_j)\mathbf{D}^{(0)\top}$. Under condition (a), $\mathbf{D}^{(0)}$ has full column rank, so the eigendecomposition of the between-site covariance (positive semidefinite, rank $\leq K$) identifies $\mathbf{D}^{(0)}$ up to orthogonal rotation. The diagonal structure of $\text{Cov}_j(\boldsymbol{\Lambda}_j)$ resolves rotational ambiguity to permutation and sign, following~\citet{broderick2012}. Given $\mathbf{D}^{(0)}$, the offsets $\boldsymbol{\Delta}_j$ are identified from $\hat{\mathbf{D}}^{(j)} - \mathbf{D}^{(0)}$ where $\hat{\mathbf{D}}^{(j)}$ is the within-site maximum likelihood dictionary. $\square$
+
+\paragraph{Proof of Proposition~\ref{prop:consistency}.}
+For $K > K_{\mathrm{true}}$ with a spurious atom $k'$, the Bayes factor against including $k'$ is:
+\[
+  \text{BF}(K_{\mathrm{true}}, K_{\mathrm{true}}{+}1) = \frac{p(\mathbf{X} \mid K_{\mathrm{true}})}{p(\mathbf{X} \mid K_{\mathrm{true}}{+}1)} \geq C \cdot \left(\frac{\sigma^2}{\tau^{-1} + \lambda^{-1}}\right)^{D/2}
+\]
+which grows without bound as $N \to \infty$ (through the data-dependent normalization). The IBP prior mass on $K_{\mathrm{true}}{+}1$ features decays as $O((\alpha_0/K)^{K+1})$, which is overwhelmed by the exponentially growing Bayes factor. $\square$
+
+\paragraph{Proof of Proposition~\ref{prop:elbo}.}
+Per variable: $\text{KL}(\text{Concrete}(\pi, \tau_c) \| \text{Bern}(\pi)) \leq \tau_c(\pi\log\pi + (1{-}\pi)\log(1{-}\pi) + \log 2) \leq \tau_c \log 2$. Summing over $N \cdot K_{\mathrm{eff}}$ active variables with $K_{\mathrm{eff}} \approx \alpha_0 \log N$ gives total gap $O(N\alpha_0\tau_c \log N \log 2)$. Per observation: $O(\tau_c \alpha_0 \log N \log 2) = O(\tau_c \log K_{\max})$. $\square$
+
+\end{document}

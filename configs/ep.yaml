@@ -1,0 +1,25 @@
+seed: 42
+run_avi: true
+
+data:
+  data_dir: data/electrophysiology/
+  n_sites: 3
+  data_dim: 256  # EGM feature dimension
+
+avi:
+  k_max: 80
+  alpha0: 4.0
+  encoder_hidden: [512, 256, 128]
+  site_embed_dim: 64
+  lr: 0.0005
+  epochs: 400
+  batch_size: 64
+  temp_init: 1.0
+  temp_final: 0.05
+  temp_anneal_epochs: 200
+
+rl:
+  state_dim: 60  # 2 * ~30 effective atoms
+  action_dim: 10  # ablation target options
+  total_timesteps: 500000
+  thompson_sampling: true

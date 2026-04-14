@@ -1,0 +1,30 @@
+seed: 42
+run_avi: true
+run_gibbs: true
+
+data:
+  n_sites: 5
+  n_per_site: 200
+  data_dim: 50
+  k_true: 15
+  sigma2: 0.1
+  lambda_inv: 0.1
+
+avi:
+  k_max: 100
+  alpha0: 5.0
+  encoder_hidden: [256, 128]
+  site_embed_dim: 32
+  lr: 0.001
+  epochs: 200
+  batch_size: 256
+  temp_init: 1.0
+  temp_final: 0.1
+  temp_anneal_epochs: 100
+
+gibbs:
+  k_max: 100
+  alpha0: 5.0
+  n_iter: 2000
+  burnin: 1000
+  thin: 5
