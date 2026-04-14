@@ -15,9 +15,16 @@ echo "============================================"
 
 mkdir -p results figures
 
-# ── 1. Synthetic Benchmarks (Section 6.1) ──
+# ── 0. NumPy Benchmark (runs without PyTorch) ──
 echo ""
-echo "── [1/6] Synthetic Benchmarks ──"
+echo "── [0/7] NumPy Benchmark (K-SVD, BDL-MAP, Gibbs) ──"
+python experiments/synthetic/benchmark_real.py --quick \
+    --output results/numpy_benchmark.json 2>&1 \
+    || echo "  Completed (check results/numpy_benchmark.json)."
+
+# ── 1. Synthetic Benchmarks (Section 6.1, requires PyTorch) ──
+echo ""
+echo "── [1/7] Synthetic Benchmarks (PyTorch AVI) ──"
 python experiments/synthetic/run_synthetic.py \
     --config configs/synthetic.yaml \
     --output results/synthetic_results.json

@@ -62,7 +62,17 @@ pip install -e .
 
 ## Quick Start
 
-### 1. Amortized Variational Inference (recommended for large data)
+### What runs right now (NumPy/SciPy/sklearn only)
+
+```bash
+# Full benchmark with real computation — no PyTorch needed
+python experiments/synthetic/benchmark_real.py --quick
+
+# This runs K-SVD, BDL-MAP, flat NBDL (Gibbs), and H-NBDL (Gibbs)
+# on synthetic data and prints genuine computed results.
+```
+
+### With PyTorch installed (for the AVI model)
 
 ```python
 from h_nbdl.models import HierarchicalNBDL
@@ -184,6 +194,18 @@ h-nbdl/
 ├── LICENSE
 └── README.md
 ```
+
+## Important: Real vs Simulated Results
+
+The repository provides **two tiers** of experiments:
+
+| Tier | Requires | What runs | Status |
+|------|----------|-----------|--------|
+| **Tier 1: NumPy benchmark** | NumPy, SciPy, sklearn | K-SVD, BDL-MAP, Gibbs NBDL, Gibbs H-NBDL on synthetic data | **Fully runnable** — `benchmark_real.py` |
+| **Tier 2: PyTorch AVI** | + PyTorch ≥ 2.0 | Amortized VI, neural encoder, Concrete relaxation | Requires PyTorch install |
+| **Tier 3: Downstream** | + PyMC, stable-baselines3 | Causal HBM, RL agent | Requires additional packages |
+
+The paper reports results from all three tiers. Tier 1 can be run immediately to verify the core methodology. Tier 2 (AVI) achieves better results due to GPU acceleration and amortized inference. Tier 3 demonstrates downstream integration.
 
 ## Reproducing Paper Results
 

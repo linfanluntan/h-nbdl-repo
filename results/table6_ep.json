@@ -1,0 +1,26 @@
+{
+  "Raw": {
+    "success": 0.78,
+    "transfer": 0.756
+  },
+  "K-SVD(K=20)": {
+    "success": 0.638,
+    "transfer": 0.756
+  },
+  "VAE(d=30)": {
+    "success": 0.604,
+    "transfer": 0.756
+  },
+  "BDL-MAP": {
+    "success": 0.78,
+    "transfer": 0.326
+  },
+  "Flat NBDL": {
+    "success": 0.78,
+    "transfer": 0.684
+  },
+  "H-NBDL": {
+    "success": 0.646,
+    "transfer": 0.756
+  }
+}

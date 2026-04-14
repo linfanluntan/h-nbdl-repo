@@ -1,0 +1,37 @@
+{
+  "Raw": {
+    "auc": 0.659,
+    "auc_std": 0.031,
+    "min_site_auc": 0.6
+  },
+  "ComBat": {
+    "auc": 0.63,
+    "auc_std": 0.024,
+    "min_site_auc": 0.603
+  },
+  "K-SVD(K=20)": {
+    "auc": 0.619,
+    "auc_std": 0.03,
+    "min_site_auc": 0.514
+  },
+  "VAE(d=20)": {
+    "auc": 0.634,
+    "auc_std": 0.029,
+    "min_site_auc": 0.562
+  },
+  "BDL-MAP": {
+    "auc": 0.632,
+    "auc_std": 0.029,
+    "min_site_auc": 0.568
+  },
+  "Flat NBDL": {
+    "auc": 0.67,
+    "auc_std": 0.031,
+    "min_site_auc": 0.623
+  },
+  "H-NBDL": {
+    "auc": 0.607,
+    "auc_std": 0.016,
+    "min_site_auc": 0.576
+  }
+}
